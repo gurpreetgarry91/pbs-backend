@@ -4,6 +4,7 @@ from app.models.roles import *
 from app.models.subscription import MasterSubscription
 from app.models.user_subscription import UserSubscription
 from app.models.media import Media
+from app.models.advertisement import Advertisement
 
 def create_all_tables():
     Base.metadata.create_all(bind=engine)

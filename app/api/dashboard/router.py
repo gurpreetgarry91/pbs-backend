@@ -5,6 +5,7 @@ from app.models import SessionLocal
 from app.models.user import User
 from app.models.subscription import MasterSubscription
 from app.models.media import Media
+from app.models.advertisement import Advertisement
 from fastapi import UploadFile, File, Form
 from typing import List as TypingList
 import os
@@ -301,6 +302,76 @@ def list_media(user_id: int, date: str, db: Session = Depends(get_db), current_u
 def _ensure_upload_dir(path: Path):
     if not path.exists():
         path.mkdir(parents=True, exist_ok=True)
+
+
+# Advertisements CRUD (image uploads only)
+@router.get("/advertisements")
+def list_advertisements(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ads = db.query(Advertisement).filter(Advertisement.is_deleted == False).all()
+    result = []
+    for a in ads:
+        rel = Path(a.stored_path)
+        url = f"/uploads/advertisements/{rel.name}"
+        result.append({
+            "id": a.id,
+            "original_name": a.original_name,
+            "url": url,
+            "created_at": a.created_at,
+        })
+    return result
+
+
+@router.post("/advertisements")
+def upload_advertisement(files: TypingList[UploadFile] = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Only accept images
+    base_dir = Path.cwd() / "uploads" / "advertisements"
+    _ensure_upload_dir(base_dir)
+    created = []
+    for file in files:
+        ctype = (file.content_type or "").lower()
+        if not ctype.startswith("image"):
+            # skip non-image files (or you could raise)
+            continue
+        filename = file.filename
+        safe_name = filename.replace("..", "").replace("/", "_")
+        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        stored_name = f"{timestamp}_{safe_name}"
+        dest = base_dir / stored_name
+        with dest.open("wb") as f:
+            f.write(file.file.read())
+        rel_path = Path("advertisements") / stored_name
+        ad = Advertisement(original_name=filename, stored_path=str(rel_path.as_posix()), added_by=current_user.user_id)
+        db.add(ad)
+        db.commit()
+        db.refresh(ad)
+        created.append({"id": ad.id, "original_name": ad.original_name, "url": f"/uploads/advertisements/{stored_name}"})
+    return {"created": created}
+
+
+@router.get("/advertisements/{ad_id}")
+def get_advertisement(ad_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    a = db.query(Advertisement).filter(Advertisement.id == ad_id, Advertisement.is_deleted == False).first()
+    if not a:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    rel = Path(a.stored_path)
+    return {"id": a.id, "original_name": a.original_name, "url": f"/uploads/advertisements/{rel.name}", "created_at": a.created_at}
+
+
+@router.delete("/advertisements/{ad_id}")
+def delete_advertisement(ad_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    a = db.query(Advertisement).filter(Advertisement.id == ad_id).first()
+    if not a:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    # try to delete file
+    try:
+        file_path = Path.cwd() / "uploads" / Path(a.stored_path)
+        if file_path.exists():
+            file_path.unlink()
+    except Exception:
+        pass
+    a.is_deleted = True
+    db.commit()
+    return {"detail": "Advertisement deleted"}
 
 
 @router.post("/media")
